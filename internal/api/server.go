@@ -644,6 +644,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 		mgmt.GET("/copilot/quota", s.mgmt.GetCopilotQuota)
+		mgmt.GET("/kiro/quota", s.mgmt.GetKiroQuota)
 	}
 }
 
