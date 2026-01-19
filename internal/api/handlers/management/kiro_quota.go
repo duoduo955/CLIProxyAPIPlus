@@ -31,6 +31,7 @@ type kiroUsageResult struct {
 			CurrentUsageWithPrecision float64 `json:"currentUsageWithPrecision"`
 			UsageLimitWithPrecision   float64 `json:"usageLimitWithPrecision"`
 			FreeTrialStatus           string  `json:"freeTrialStatus"`
+			FreeTrialExpiry           float64 `json:"freeTrialExpiry"`
 		} `json:"freeTrialInfo,omitempty"`
 	} `json:"usageBreakdownList"`
 	NextDateReset float64 `json:"nextDateReset"`
@@ -104,9 +105,15 @@ func (h *Handler) GetKiroQuota(c *gin.Context) {
 	response := map[string]interface{}{
 		"subscription_title":    usage.SubscriptionInfo.SubscriptionTitle,
 		"credit_usage":          0.0,
-		"context_usage_percent": 0.0,
 		"monthly_credit_limit":  0.0,
-		"monthly_context_limit": 100.0, // Default context limit percent
+		"next_reset_date":       nil,
+		"trial_expiry_date":     nil,
+	}
+
+	// Format next reset date
+	if usage.NextDateReset > 0 {
+		resetTime := time.Unix(int64(usage.NextDateReset), 0)
+		response["next_reset_date"] = resetTime.Format(time.RFC3339)
 	}
 
 	if len(usage.UsageBreakdownList) > 0 {
@@ -118,6 +125,10 @@ func (h *Handler) GetKiroQuota(c *gin.Context) {
 			response["monthly_credit_limit"] = breakdown.FreeTrialInfo.UsageLimitWithPrecision
 			// Append trial indicator to subscription title if not already there
 			currentTitle := fmt.Sprintf("%v", response["subscription_title"])
+			if breakdown.FreeTrialInfo.FreeTrialExpiry > 0 {
+				expiryTime := time.Unix(int64(breakdown.FreeTrialInfo.FreeTrialExpiry), 0)
+				response["trial_expiry_date"] = expiryTime.Format(time.RFC3339)
+			}
 			response["subscription_title"] = currentTitle + " (Trial)"
 		} else {
 			// Fallback to standard limits
