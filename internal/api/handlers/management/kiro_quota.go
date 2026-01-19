@@ -27,6 +27,11 @@ type kiroUsageResult struct {
 	UsageBreakdownList []struct {
 		CurrentUsageWithPrecision float64 `json:"currentUsageWithPrecision"`
 		UsageLimitWithPrecision   float64 `json:"usageLimitWithPrecision"`
+		FreeTrialInfo             *struct {
+			CurrentUsageWithPrecision float64 `json:"currentUsageWithPrecision"`
+			UsageLimitWithPrecision   float64 `json:"usageLimitWithPrecision"`
+			FreeTrialStatus           string  `json:"freeTrialStatus"`
+		} `json:"freeTrialInfo,omitempty"`
 	} `json:"usageBreakdownList"`
 	NextDateReset float64 `json:"nextDateReset"`
 }
@@ -105,8 +110,20 @@ func (h *Handler) GetKiroQuota(c *gin.Context) {
 	}
 
 	if len(usage.UsageBreakdownList) > 0 {
-		response["credit_usage"] = usage.UsageBreakdownList[0].CurrentUsageWithPrecision
-		response["monthly_credit_limit"] = usage.UsageBreakdownList[0].UsageLimitWithPrecision
+		breakdown := usage.UsageBreakdownList[0]
+		// Check for active free trial
+		if breakdown.FreeTrialInfo != nil && breakdown.FreeTrialInfo.FreeTrialStatus == "ACTIVE" {
+			log.Infof("kiro quota: using free trial info (Status: %s)", breakdown.FreeTrialInfo.FreeTrialStatus)
+			response["credit_usage"] = breakdown.FreeTrialInfo.CurrentUsageWithPrecision
+			response["monthly_credit_limit"] = breakdown.FreeTrialInfo.UsageLimitWithPrecision
+			// Append trial indicator to subscription title if not already there
+			currentTitle := fmt.Sprintf("%v", response["subscription_title"])
+			response["subscription_title"] = currentTitle + " (Trial)"
+		} else {
+			// Fallback to standard limits
+			response["credit_usage"] = breakdown.CurrentUsageWithPrecision
+			response["monthly_credit_limit"] = breakdown.UsageLimitWithPrecision
+		}
 	}
 
 	c.JSON(http.StatusOK, response)
