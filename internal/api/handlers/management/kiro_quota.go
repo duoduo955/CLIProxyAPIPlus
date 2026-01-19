@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
 	log "github.com/sirupsen/logrus"
 )
 
