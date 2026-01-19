@@ -199,6 +199,9 @@ func getUsageLimits(ctx context.Context, proxyURL, accessToken, profileArn strin
 		return nil, err
 	}
 
+	// Debug log: print raw response
+	log.Infof("kiro quota raw response: %s", string(body))
+
 	var result kiroUsageResult
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse usage response: %w", err)
