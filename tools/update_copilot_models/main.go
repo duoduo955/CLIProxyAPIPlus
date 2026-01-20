@@ -61,13 +61,14 @@ type CopilotModelsResponse struct {
 
 // CopilotModel represents a single model from the API
 type CopilotModel struct {
-	ID           string              `json:"id"`
-	Name         string              `json:"name"`
-	Object       string              `json:"object"`
-	Version      string              `json:"version"`
-	Vendor       string              `json:"vendor"`
-	Preview      bool                `json:"preview"`
-	Capabilities CopilotCapabilities `json:"capabilities"`
+	ID                 string              `json:"id"`
+	Name               string              `json:"name"`
+	Object             string              `json:"object"`
+	Version            string              `json:"version"`
+	Vendor             string              `json:"vendor"`
+	Preview            bool                `json:"preview"`
+	Capabilities       CopilotCapabilities `json:"capabilities"`
+	SupportedEndpoints []string            `json:"supported_endpoints"`
 }
 
 // CopilotCapabilities represents model capabilities
@@ -76,6 +77,18 @@ type CopilotCapabilities struct {
 	Type      string        `json:"type"`
 	Tokenizer string        `json:"tokenizer"`
 	Limits    CopilotLimits `json:"limits"`
+	Supports  CopilotSupports `json:"supports"`
+}
+
+// CopilotSupports represents what features the model supports
+type CopilotSupports struct {
+	MaxThinkingBudget  int  `json:"max_thinking_budget"`
+	MinThinkingBudget  int  `json:"min_thinking_budget"`
+	ParallelToolCalls  bool `json:"parallel_tool_calls"`
+	Streaming          bool `json:"streaming"`
+	StructuredOutputs  bool `json:"structured_outputs"`
+	ToolCalls          bool `json:"tool_calls"`
+	Vision             bool `json:"vision"`
 }
 
 // CopilotLimits represents model token limits
@@ -88,6 +101,7 @@ type CopilotLimits struct {
 func main() {
 	authDir := flag.String("auth-dir", "", "Auth directory path (default: ~/.cli-proxy-api)")
 	dryRun := flag.Bool("dry-run", false, "Print generated code without updating file")
+	outputFile := flag.String("output", "", "Save raw API response to file (e.g., copilot_models.json)")
 	flag.Parse()
 
 	// Determine auth directory
@@ -120,7 +134,7 @@ func main() {
 
 	// Fetch models
 	fmt.Println("Fetching models from GitHub Copilot API...")
-	models, err := fetchCopilotModels(apiToken.Token)
+	models, rawJSON, err := fetchCopilotModels(apiToken.Token)
 	if err != nil {
 		fmt.Printf("Error fetching models: %v\n", err)
 		os.Exit(1)
@@ -128,10 +142,44 @@ func main() {
 
 	fmt.Printf("Fetched %d models from API\n", len(models))
 
-	// Print model list
+	// Save raw API response to file if requested
+	if *outputFile != "" {
+		var prettyJSON map[string]interface{}
+		var formatted []byte
+		if err := json.Unmarshal(rawJSON, &prettyJSON); err == nil {
+			formatted, _ = json.MarshalIndent(prettyJSON, "", "  ")
+		} else {
+			formatted = rawJSON
+		}
+
+		if err := os.WriteFile(*outputFile, formatted, 0644); err != nil {
+			fmt.Printf("Warning: Failed to save output to %s: %v\n", *outputFile, err)
+		} else {
+			fmt.Printf("Raw API response saved to: %s\n", *outputFile)
+		}
+	}
+
+	// Print raw API response for inspection (only if no output file specified)
+	if *outputFile == "" {
+		fmt.Println("\n=== RAW API RESPONSE ===")
+		var prettyJSON map[string]interface{}
+		if err := json.Unmarshal(rawJSON, &prettyJSON); err == nil {
+			formatted, _ := json.MarshalIndent(prettyJSON, "", "  ")
+			fmt.Println(string(formatted))
+		} else {
+			fmt.Println(string(rawJSON))
+		}
+		fmt.Println("=== END RAW API RESPONSE ===\n")
+	}
+
+	// Print model list with detailed info
 	fmt.Println("\nModels found:")
 	for _, m := range models {
 		fmt.Printf("  - %s (%s)\n", m.ID, m.Vendor)
+		fmt.Printf("    Family: %s, Type: %s\n", m.Capabilities.Family, m.Capabilities.Type)
+		fmt.Printf("    Context: %d, Output: %d\n",
+			m.Capabilities.Limits.MaxContextWindowTokens,
+			m.Capabilities.Limits.MaxOutputTokens)
 	}
 
 	// Generate the Go code
@@ -259,10 +307,10 @@ func getCopilotAPIToken(githubAccessToken string) (*CopilotAPIToken, error) {
 	return &apiToken, nil
 }
 
-func fetchCopilotModels(apiToken string) ([]CopilotModel, error) {
+func fetchCopilotModels(apiToken string) ([]CopilotModel, []byte, error) {
 	req, err := http.NewRequest("GET", copilotModelsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+apiToken)
@@ -276,26 +324,26 @@ func fetchCopilotModels(apiToken string) ([]CopilotModel, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	var modelsResp CopilotModelsResponse
 	if err := json.Unmarshal(body, &modelsResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		return nil, body, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	return modelsResp.Data, nil
+	return modelsResp.Data, body, nil
 }
 
 func generateGoCode(models []CopilotModel) string {
@@ -340,6 +388,9 @@ func generateGoCode(models []CopilotModel) string {
 			maxOutputTokens = 16384
 		}
 
+		// Determine supported endpoints
+		endpoints := determineSupportedEndpoints(m)
+
 		sb.WriteString("\t\t{\n")
 		sb.WriteString(fmt.Sprintf("\t\t\tID:                  %q,\n", m.ID))
 		sb.WriteString("\t\t\tObject:              \"model\",\n")
@@ -350,6 +401,17 @@ func generateGoCode(models []CopilotModel) string {
 		sb.WriteString(fmt.Sprintf("\t\t\tDescription:         %q,\n", description))
 		sb.WriteString(fmt.Sprintf("\t\t\tContextLength:       %d,\n", contextLength))
 		sb.WriteString(fmt.Sprintf("\t\t\tMaxCompletionTokens: %d,\n", maxOutputTokens))
+
+		// Add SupportedEndpoints if available
+		if len(endpoints) > 0 {
+			sb.WriteString(fmt.Sprintf("\t\t\tSupportedEndpoints:  %s,\n", formatStringSlice(endpoints)))
+		}
+
+		// Add Thinking support if available
+		if thinkingStr := generateThinkingSupport(m); thinkingStr != "" {
+			sb.WriteString(fmt.Sprintf("\t\t\tThinking:            %s,\n", thinkingStr))
+		}
+
 		sb.WriteString("\t\t},\n")
 	}
 
@@ -359,33 +421,94 @@ func generateGoCode(models []CopilotModel) string {
 	return sb.String()
 }
 
+// determineSupportedEndpoints determines which API endpoints a model supports
+func determineSupportedEndpoints(model CopilotModel) []string {
+	// If API provides supported_endpoints, use it
+	if len(model.SupportedEndpoints) > 0 {
+		return model.SupportedEndpoints
+	}
+
+	modelLower := strings.ToLower(model.ID)
+
+	// Embedding models don't support chat/responses endpoints
+	if strings.Contains(modelLower, "embedding") {
+		return []string{}
+	}
+
+	// Codex models only support /responses
+	if strings.Contains(modelLower, "-codex") {
+		return []string{"/responses"}
+	}
+
+	// Default: support /chat/completions (safest option)
+	return []string{"/chat/completions"}
+}
+
+// generateThinkingSupport generates the ThinkingSupport configuration
+func generateThinkingSupport(model CopilotModel) string {
+	maxBudget := model.Capabilities.Supports.MaxThinkingBudget
+	minBudget := model.Capabilities.Supports.MinThinkingBudget
+
+	// If model has thinking budget info, use it
+	if maxBudget > 0 {
+		return fmt.Sprintf("&ThinkingSupport{Min: %d, Max: %d, ZeroAllowed: false, DynamicAllowed: false}",
+			minBudget, maxBudget)
+	}
+
+	// Check if it's a GPT model that supports level-based thinking
+	modelLower := strings.ToLower(model.ID)
+	if strings.HasPrefix(modelLower, "gpt-") || strings.HasPrefix(modelLower, "o1") || strings.HasPrefix(modelLower, "o3") {
+		return "&ThinkingSupport{Levels: []string{\"minimal\", \"low\", \"medium\", \"high\"}}"
+	}
+
+	return ""
+}
+
+// formatStringSlice formats a string slice as Go code
+func formatStringSlice(slice []string) string {
+	if len(slice) == 0 {
+		return "[]string{}"
+	}
+
+	quoted := make([]string, len(slice))
+	for i, s := range slice {
+		quoted[i] = fmt.Sprintf("%q", s)
+	}
+
+	return fmt.Sprintf("[]string{%s}", strings.Join(quoted, ", "))
+}
+
 func findProjectRoot() (string, error) {
-	// Try to find go.mod file to determine project root
+	// Start from current working directory
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 
+	fmt.Printf("Starting search from: %s\n", dir)
+
+	// Try to find go.mod file by walking up the directory tree
+	searchPath := dir
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir, nil
+		goModPath := filepath.Join(searchPath, "go.mod")
+		fmt.Printf("Checking: %s\n", goModPath)
+
+		if _, err := os.Stat(goModPath); err == nil {
+			// Found go.mod, this is the project root
+			fmt.Printf("Found project root: %s\n", searchPath)
+			return searchPath, nil
 		}
 
-		parent := filepath.Dir(dir)
-		if parent == dir {
+		// Move to parent directory
+		parent := filepath.Dir(searchPath)
+		if parent == searchPath {
+			// Reached filesystem root without finding go.mod
 			break
 		}
-		dir = parent
+		searchPath = parent
 	}
 
-	// If not found, try relative to executable
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("could not find project root: %w", err)
-	}
-
-	// Assume tools/update_copilot_models/main.go structure
-	return filepath.Join(filepath.Dir(exePath), "..", ".."), nil
+	return "", fmt.Errorf("could not find project root (go.mod not found), searched from: %s", dir)
 }
 
 func updateModelDefinitions(filePath string, newCode string) error {
