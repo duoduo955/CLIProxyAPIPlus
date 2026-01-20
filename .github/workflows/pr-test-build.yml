@@ -19,5 +19,10 @@ jobs:
           cache: true
       - name: Build
         run: |
-          go build -o test-output ./cmd/server
-          rm -f test-output
+          go build -o cli-proxy-api ./cmd/server
+          # rm -f test-output
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-proxy-api-binary
+          path: cli-proxy-api
