@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	copilotauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/copilot"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -108,7 +109,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	useResponses := useGitHubCopilotResponsesEndpoint(from)
+	useResponses := shouldUseResponsesEndpoint(req.Model, from)
 	to := sdktranslator.FromString("openai")
 	if useResponses {
 		to = sdktranslator.FromString("openai-response")
@@ -211,7 +212,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	useResponses := useGitHubCopilotResponsesEndpoint(from)
+	useResponses := shouldUseResponsesEndpoint(req.Model, from)
 	to := sdktranslator.FromString("openai")
 	if useResponses {
 		to = sdktranslator.FromString("openai-response")
@@ -428,7 +429,29 @@ func (e *GitHubCopilotExecutor) normalizeModel(_ string, body []byte) []byte {
 	return body
 }
 
+func shouldUseResponsesEndpoint(modelName string, sourceFormat sdktranslator.Format) bool {
+	// If source format is explicitly openai-response, use /responses
+	if sourceFormat.String() == "openai-response" {
+		return true
+	}
+
+	// Check if model supports /responses endpoint
+	modelInfo := registry.GetGlobalRegistry().GetModelInfo(modelName, githubCopilotAuthType)
+	if modelInfo != nil && modelInfo.SupportedEndpoints != nil {
+		for _, endpoint := range modelInfo.SupportedEndpoints {
+			if endpoint == "/responses" {
+				return true // Prefer /responses if supported (more advanced API)
+			}
+		}
+	}
+
+	// Default to /chat/completions for backward compatibility
+	return false
+}
+
 func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format) bool {
+	// Deprecated: Use shouldUseResponsesEndpoint instead
+	// Kept for backward compatibility
 	return sourceFormat.String() == "openai-response"
 }
 
