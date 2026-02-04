@@ -381,6 +381,16 @@ func shortenToolNameIfNeeded(name string) string {
 	return name[:limit]
 }
 
+func ensureKiroInputSchema(parameters interface{}) interface{} {
+	if parameters != nil {
+		return parameters
+	}
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+}
+
 // convertOpenAIToolsToKiro converts OpenAI tools to Kiro format
 func convertOpenAIToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 	var kiroTools []KiroToolWrapper
@@ -401,7 +411,12 @@ func convertOpenAIToolsToKiro(tools gjson.Result) []KiroToolWrapper {
 
 		name := fn.Get("name").String()
 		description := fn.Get("description").String()
-		parameters := fn.Get("parameters").Value()
+		parametersResult := fn.Get("parameters")
+		var parameters interface{}
+		if parametersResult.Exists() && parametersResult.Type != gjson.Null {
+			parameters = parametersResult.Value()
+		}
+		parameters = ensureKiroInputSchema(parameters)
 
 		// Shorten tool name if it exceeds 64 characters (common with MCP tools)
 		originalName := name
@@ -561,7 +576,21 @@ func processOpenAIMessages(messages gjson.Result, modelID, origin string) ([]Kir
 		}
 	}
 
+	// Truncate history if too long to prevent Kiro API errors
+	history = truncateHistoryIfNeeded(history)
+
 	return history, currentUserMsg, currentToolResults
+}
+
+const kiroMaxHistoryMessages = 50
+
+func truncateHistoryIfNeeded(history []KiroHistoryMessage) []KiroHistoryMessage {
+	if len(history) <= kiroMaxHistoryMessages {
+		return history
+	}
+
+	log.Debugf("kiro-openai: truncating history from %d to %d messages", len(history), kiroMaxHistoryMessages)
+	return history[len(history)-kiroMaxHistoryMessages:]
 }
 
 // buildUserMessageFromOpenAI builds a user message from OpenAI format and extracts tool results
@@ -662,8 +691,23 @@ func buildAssistantMessageFromOpenAI(msg gjson.Result) KiroAssistantResponseMess
 		}
 	}
 
+	// CRITICAL FIX: Kiro API requires non-empty content for assistant messages
+	// This can happen with compaction requests or error recovery scenarios
+	finalContent := contentBuilder.String()
+	if strings.TrimSpace(finalContent) == "" {
+		const defaultAssistantContentWithTools = "I'll help you with that."
+		const defaultAssistantContent = "I understand."
+
+		if len(toolUses) > 0 {
+			finalContent = defaultAssistantContentWithTools
+		} else {
+			finalContent = defaultAssistantContent
+		}
+		log.Debugf("kiro-openai: assistant content was empty, using default: %s", finalContent)
+	}
+
 	return KiroAssistantResponseMessage{
-		Content:  contentBuilder.String(),
+		Content:  finalContent,
 		ToolUses: toolUses,
 	}
 }

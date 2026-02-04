@@ -109,6 +109,9 @@ func (e *AntigravityExecutor) HttpRequest(ctx context.Context, auth *cliproxyaut
 
 // Execute performs a non-streaming request to the Antigravity API.
 func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
+	if opts.Alt == "responses/compact" {
+		return resp, statusErr{code: http.StatusNotImplemented, msg: "/responses/compact not supported"}
+	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	isClaude := strings.Contains(strings.ToLower(baseModel), "claude")
 
@@ -148,7 +151,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 
-	attempts := antigravityRetryAttempts(e.cfg)
+	attempts := antigravityRetryAttempts(auth, e.cfg)
 
 attemptLoop:
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -289,7 +292,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 
-	attempts := antigravityRetryAttempts(e.cfg)
+	attempts := antigravityRetryAttempts(auth, e.cfg)
 
 attemptLoop:
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -641,6 +644,9 @@ func (e *AntigravityExecutor) convertStreamToNonStream(stream []byte) []byte {
 
 // ExecuteStream performs a streaming request to the Antigravity API.
 func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (stream <-chan cliproxyexecutor.StreamChunk, err error) {
+	if opts.Alt == "responses/compact" {
+		return nil, statusErr{code: http.StatusNotImplemented, msg: "/responses/compact not supported"}
+	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
 	ctx = context.WithValue(ctx, "alt", "")
@@ -677,7 +683,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 
-	attempts := antigravityRetryAttempts(e.cfg)
+	attempts := antigravityRetryAttempts(auth, e.cfg)
 
 attemptLoop:
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -1447,11 +1453,16 @@ func resolveUserAgent(auth *cliproxyauth.Auth) string {
 	return defaultAntigravityAgent
 }
 
-func antigravityRetryAttempts(cfg *config.Config) int {
-	if cfg == nil {
-		return 1
+func antigravityRetryAttempts(auth *cliproxyauth.Auth, cfg *config.Config) int {
+	retry := 0
+	if cfg != nil {
+		retry = cfg.RequestRetry
 	}
-	retry := cfg.RequestRetry
+	if auth != nil {
+		if override, ok := auth.RequestRetryOverride(); ok {
+			retry = override
+		}
+	}
 	if retry < 0 {
 		retry = 0
 	}
